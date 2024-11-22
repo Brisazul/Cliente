@@ -1,151 +1,142 @@
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestClassifier
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# Función para entrenar el modelo de regresión
+def train_economic_impact_model(df, rendimiento):
+    X = df[['Rendimiento_Cultivo_MT_por_HA']]  # Variable predictora
+    y = df['Impacto_Económico_Millones_USD']  # Variable objetivo
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
 
+    # Entrenar modelo de regresión
+    lin_reg = LinearRegression()
+    lin_reg.fit(X_train, y_train)
+
+    # Predicciones
+    predictions = lin_reg.predict(X_test)
+    predictions = lin_reg.predict(rendimiento)
+
+    return lin_reg, predictions
+
+# Función para entrenar el modelo de Random Forest para estrategias adaptativas
+def train_strategy_model(df, temp, precipitaciones, salud_suelo, riego, pesticidas, fertilizantes):
+    df_n = df[['Temperatura_Promedio_C', 'Precipitacion_Total_mm', 'Acceso_a_Riego_%',
+               'Uso_de_Pesticidas_KG_por_HA', 'Uso_de_Fertilizantes_KG_por_HA', 'Índice_de_Salud_Suelo',
+               'Estrategias_de_Adaptación']].copy()
+
+    # Mapeo de las estrategias
+    estrategia_mapping = {
+        'No Adaptation': 0,
+        'Water Management': 1,
+        'Drought-resistant Crops': 2,
+        'Organic Farming': 3,
+        'Crop Rotation': 4
+    }
+
+    X = df_n.drop(columns=['Estrategias_de_Adaptación'])
+    y = df_n['Estrategias_de_Adaptación']
+
+    # Entrenamiento con Random Forest
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    rf_model = RandomForestClassifier()
+    rf_model.fit(X_train, y_train)
+
+    # Predicciones
+    input_data = np.array([[temp, precipitaciones, riego, pesticidas, fertilizantes, salud_suelo]])
+    estrategia_predicha = rf_model.predict(input_data)
+    estrategia_predicha_str = [estrategia_predicha[0]]
+
+    return estrategia_predicha_str
+
+def train_crops_model(df, temp2, precipitaciones2):
+    X = df[['Temperatura_Promedio_C', 'Precipitacion_Total_mm']]
+    y = df['Tipo_de_Cultivo']
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.3, random_state=42)
+
+    rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+    rf_model.fit(X_train, y_train)
+
+    # Predicciones
+    input_data = np.array([[temp2, precipitaciones2]])
+    cultivo_predicho = rf_model.predict(input_data)
+    cultivo_predicho_str = [cultivo_predicho[0]]
+
+    return cultivo_predicho_str
+
+# Función para cargar los datos directamente desde una URL
 @st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+def load_data():
+    return pd.read_csv('/workspaces/Interfaz_grafica_cliente/impacto_del_cambio_climatico_en_la_agricultura.csv')
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+# Cargar los datos
+df = load_data()
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+# INTERFAZ
+traduccion_estrategia = {
+    'No Adaptation': 'Sin adaptación',
+    'Water Management': 'Gestión del agua',
+    'Drought-resistant Crops': 'Cultivos resistentes a la sequía',
+    'Organic Farming': 'Agricultura orgánica',
+    'Crop Rotation': 'Rotación de cultivos'
+}
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+traduccion_cultivo = {
+    'Wheat': 'Trigo',
+    'Corn': 'Maíz',
+    'Soybeans': 'Soja',
+    'Rice': 'Arroz',
+    'Barley': 'Cebada',
+    'Sugarcane': 'Caña de azúcar',
+    'Cotton': 'Algodón',
+    'Vegetables': 'Vegetales',
+    'Fruit': 'Frutas',
+    'Coffe': 'Café'
+}
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+st.title("Análisis del cambio climático en la agricultura argentina")
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+st.subheader("¿Qué desea hacer esta vez?")
+with st.expander("📈 Predicción del impacto económico en función del rendimiento de los cultivos"):
+    rendimiento = st.slider("Rendimiento del cultivo (en toneladas por hectárea)", 0.0, 5.0, 2.5, 0.1)
+    rendimiento_reshaped = np.array([[rendimiento]])
+    lin_reg, impacto_predicho = train_economic_impact_model(df, rendimiento_reshaped)
+    st.write(f"Impacto económico estimado: {impacto_predicho[0]:,.2f} millones de dólares")
 
-    return gdp_df
+    # Gráfico de predicción
+    plt.figure(figsize=(8, 6))
+    rendimiento_range = np.linspace(0, 5, 100).reshape(-1, 1)
+    impacto_range = lin_reg.predict(rendimiento_range)
+    plt.scatter(rendimiento, impacto_predicho, color='blue', label='Predicción', alpha=0.7)
+    plt.plot(rendimiento_range, impacto_range, color='grey', linestyle='--', label='Línea de predicción')
+    plt.xlabel("Rendimiento del cultivo (toneladas/ha)")
+    plt.ylabel("Impacto Económico (millones de dólares)")
+    plt.title("Impacto económico vs. Rendimiento del cultivo")
+    plt.legend()
+    st.pyplot(plt)
 
-gdp_df = get_gdp_data()
+with st.expander("🌱 Clasificación de las estrategias adaptativas dependiendo de la salud del suelo"):
+    temp = st.slider("Temperatura anual promedio (°C)", -5.0, 35.0, 15.0, 0.1, key='slider_temp_estrategias')
+    precipitaciones = st.slider("Precipitaciones anuales totales (mm)", 200.0, 3000.0, 1600.0, 0.1, key='slider-precipitaciones_estrategias')
+    salud_suelo = st.slider("Índice de salud del suelo", 30.0, 100.0, 65.0, 0.1)
+    riego = st.slider("Acceso a riego (%)", 10.0, 100.0, 55.0, 0.1)
+    pesticidas = st.slider("Uso de pesticidas (kg/ha)", 0.0, 50.0, 25.0, 0.1)
+    fertilizantes = st.slider("Uso de fertilizantes (kg/ha)", 0.0, 100.0, 50.0, 0.1)
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+    estrategia = train_strategy_model(df, temp, precipitaciones, salud_suelo, riego, pesticidas, fertilizantes)
+    estrategia_traducida = traduccion_estrategia.get(estrategia[0])
+    st.write(f"La mejor estrategia es: {estrategia_traducida}")
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+with st.expander("🌾 Clasificación de los cultivos dependiendo del clima"):
+    temp2 = st.slider("Temperatura anual promedio (°C)", -5.0, 35.0, 15.0, 0.1, key='slider_temp_cultivos')
+    precipitaciones2 = st.slider("Precipitaciones anuales totales (mm)", 200.0, 3000.0, 1600.0, 0.1, key='slider_precipitaciones_cultivos')
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+    cultivo = train_crops_model(df, temp2, precipitaciones2)
+    cultivo_traducido = traduccion_cultivo.get(cultivo[0])
+    st.write(f"El cultivo predominante es: {cultivo_traducido}")
